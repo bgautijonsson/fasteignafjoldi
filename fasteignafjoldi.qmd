@@ -142,6 +142,83 @@ ggsave(plot = p,
        width = 8, height = 0.5 * 8, scale = 1.3, bg = "white")
 ```
 
+### Árleg breyting í íbúðum og íbúum
+
+```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
+p <- d |> 
+    group_by(sveitarfelag) |> 
+    mutate(Fasteignir =  c(1, exp(diff(log(fullbuid)))),
+           Íbúar =  c(1, exp(diff(log(mannfjoldi))))) |> 
+    ungroup() |> 
+    select(-fullbuid, -ofullbuid, -mannfjoldi) |> 
+    pivot_longer(c(-ar, -sveitarfelag)) |> 
+    filter(ar >= 2010, ar < 2022) |> 
+    mutate(x = ar - 0.1 + 0.2 * (name == "Fasteignir")) |> 
+    ggplot(aes(ar, value)) +
+    geom_hline(yintercept = 1, lty = 2, alpha = 0.6) +
+    geom_area(aes(fill  = name), alpha = 0.3, position = "identity") +
+    geom_line(aes(col = name)) +
+    # geom_point(aes(col = name)) +
+    # geom_segment(aes(col = name, xend = x, yend = 1)) +
+    scale_x_continuous(breaks = c(2010, 2012, 2014, 2016, 2018, 2021)) +
+    scale_y_log10(labels = function(x)  percent(x - 1),
+                       expand = expansion()) +
+    scale_colour_brewer(type = "qual", palette = "Set1") +
+    scale_fill_brewer(type = "qual", palette = "Set1") +
+    facet_wrap("sveitarfelag", nrow = 2,  scales = "free") +
+    theme_half_open() +
+    theme(legend.position = "top") +
+    labs(title = "Árleg breyting í fjölda íbúða (sér- og fjölbýli) og íbúa í sveitarfélögum Höfuðborgarsvæðisins",
+         x = NULL,
+         y = NULL,
+         fill= NULL,
+         col = NULL)
+
+ggsave(plot = p,
+       filename = "hlutf_breyting_fasteignir_ibuar.png",
+       width = 8, height = 0.5 * 8, scale = 2, bg = "white")
+```
+
+### Uppsöfnuð
+
+```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
+p <- d |> 
+    group_by(sveitarfelag) |> 
+    filter(ar >= 2010) |> 
+    mutate(Fasteignir =  c(1, exp(cumsum(diff(log(fullbuid))))),
+           Íbúar =  c(1, exp(cumsum(diff(log(mannfjoldi)))))) |> 
+    ungroup() |> 
+    select(-fullbuid, -ofullbuid, -mannfjoldi) |> 
+    pivot_longer(c(-ar, -sveitarfelag)) |> 
+    filter(ar >= 2010, ar < 2022) |> 
+    mutate(x = ar - 0.1 + 0.2 * (name == "Fasteignir")) |> 
+    ggplot(aes(ar, value)) +
+    geom_hline(yintercept = 1, lty = 2, alpha = 0.6) +
+    geom_area(aes(fill  = name), alpha = 0.3, position = "identity") +
+    geom_line(aes(col = name)) +
+    # geom_point(aes(col = name)) +
+    # geom_segment(aes(col = name, xend = x, yend = 1)) +
+    scale_x_continuous(breaks = c(2010, 2012, 2014, 2016, 2018, 2021)) +
+    scale_y_log10(labels = function(x)  percent(x - 1),
+                       expand = expansion()) +
+    scale_colour_brewer(type = "qual", palette = "Set1") +
+    scale_fill_brewer(type = "qual", palette = "Set1") +
+    facet_wrap("sveitarfelag", nrow = 2) +
+    theme_half_open() +
+    theme(legend.position = "top") +
+    labs(title = "Uppsöfnuð breyting í fjölda íbúða (sér- og fjölbýli) og íbúa í sveitarfélögum Höfuðborgarsvæðisins",
+         x = NULL,
+         y = NULL,
+         fill= NULL,
+         col = NULL)
+
+p
+
+ggsave(plot = p,
+       filename = "hlutf_uppsöfnuð_breyting_fasteignir_ibuar.png",
+       width = 8, height = 0.5 * 8, scale = 2, bg = "white")
+```
+
 
 ## Fasteignafjöldi á íbúa
 
