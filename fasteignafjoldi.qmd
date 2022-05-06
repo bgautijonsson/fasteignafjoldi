@@ -30,6 +30,9 @@ library(cowplot)
 library(ggthemes)
 library(scales)
 library(gganimate)
+library(lubridate)
+library(ggridges)
+library(ggtext)
 ```
 
 # Gögn
@@ -68,18 +71,180 @@ mannfjoldi <- pxweb_get(
                                      "Akureyrarkaupstaður" = "Akureyrarbær"))
 
 
+
+
+fjolskyldur  <- pxweb_get(
+    url = "https://px.hagstofa.is:443/pxis/api/v1/is/Ibuar/fjolsk/Fjolskyldan/MAN07108.px",
+    query = list(
+        "Kjarnafjölskyldur" = c("1"),
+        "Sveitarfélag" = c("*"),
+        "Ár" =  c("*"),
+        "Fjölskyldugerð" = c("*")
+    )
+) |> 
+    as.data.frame() |> 
+    as_tibble() |> 
+    janitor::clean_names() |> 
+    mutate(sveitarfelag = fct_recode(sveitarfelag,
+                                     "Reykjavíkurborg" = "Reykjavík",
+                                     "Hafnarfjarðarkaupstaður" = "Hafnarfjörður",
+                                     "Seltjarnarnesbær" = "Seltjarnarnes",
+                                     "Kópavogsbær" = "Kópavogur")) |> 
+    semi_join(
+        d,
+        by = "sveitarfelag"
+    ) |> 
+    mutate(fjolskyldugerd = fct_collapse(fjolskyldugerd,
+                                         "Einhleypt foreldri" = c("Karl með börn", 
+                                                                  "Kona með börn"),
+                                         "Par með börn" = c("Óvígð sambúð með börnum",
+                                                            "Hjónaband með börnum"),
+                                         "Par án barna" = c("Óvígð sambúð án barna",
+                                                            "Hjónaband án barna"),
+                                         "Einstaklingar" = c("Einstaklingar"))) |> 
+    count(sveitarfelag, ar, fjolskyldugerd,
+          wt = kjarnafjolskyldur_eftir_sveitarfelogum_og_fjolskyldugerd_1998_2022, 
+          name = "fjolskyldur") |> 
+    mutate(ar = parse_number(ar),
+           sveitarfelag = as_factor(sveitarfelag))
+
+
+
 d <- d |> 
     inner_join(
         mannfjoldi,
         by = c("sveitarfelag", "ar")
+    ) |> 
+    inner_join(
+        fjolskyldur |> 
+            count(sveitarfelag, ar,
+                  wt = fjolskyldur, 
+                  name = "fjolskyldur"),
+        by =  c("sveitarfelag", "ar")
+    )
+
+
+read_data <- function(name) {
+    svf <- list(
+        "gbr" = "Garðabær",
+        "hfj" = "Hafnarfjarðarkaupstaður",
+        "kop" = "Kópavogsbær",
+        "moso" = "Mosfellsbær",
+        "rvk" = "Reykjavíkurborg",
+        "seltj" = "Seltjarnarnesbær"
+    )
+    
+    str_c("aldur_", name, ".csv") |> 
+        read_csv2() |> 
+        inner_join(
+            str_c("fyrstukaupendur_", name, ".csv") |> 
+                read_csv2(),
+            by = "Ár"
+        ) |> 
+        janitor::clean_names() |> 
+        mutate(sveitarfelag = svf[[name]])
+}
+
+kaupendur <- c("gbr", "hfj", "moso", "kop", "rvk", "seltj") |> 
+    map(read_data) |> 
+    reduce(bind_rows)
+
+d <- d |> 
+    inner_join(
+        kaupendur,
+        by = c("ar", "sveitarfelag")
     )
 ```
 
+
 # Myndir
 
-## Fjölgun fasteigna
+## Fjölskyldur
 
-### Á höfðatölu
+```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
+fjolskyldur |> 
+    mutate(fjolskyldugerd = ifelse(fjolskyldugerd == "Einstaklingar", "Einstaklingar", "Annað")) |> 
+    count(sveitarfelag, ar, fjolskyldugerd, wt =fjolskyldur) |> 
+    group_by(sveitarfelag, ar) |> 
+    mutate(p = n / sum(n)) |> 
+    ungroup() |> 
+    filter(fjolskyldugerd == "Einstaklingar", ar >= 2010) |> 
+    ggplot(aes(ar, p)) +
+    geom_line(aes(col = sveitarfelag))
+```
+
+
+```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
+fjolskyldur |> 
+    mutate(fjolskyldugerd = fct_reorder(fjolskyldugerd, fjolskyldur, .fun = max)) |> 
+    ggplot(aes(ar, fjolskyldur)) +
+    geom_area(aes(fill = fjolskyldugerd), position = "fill") +
+    scale_fill_brewer(type = "qual", palette = "Set1") +
+    facet_wrap("sveitarfelag", nrow = 2) +
+    coord_cartesian(expand = F) +
+    theme_half_open() +
+    theme(legend.position = "top") +
+    labs(fill = NULL)
+```
+
+
+```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
+plot_dat_alls <- d |> 
+    filter(ar >= 2010) |> 
+    group_by(ar) |> 
+    summarise(fjolskyldur = sum(fjolskyldur),
+              fullbuid = sum(fullbuid),
+              .groups = "drop") |> 
+    mutate(fjolskyldur_per_ibud = fjolskyldur / fullbuid,
+           x = ar,
+           y = fjolskyldur_per_ibud,
+           label = "Höfuðborgarsvæðið")
+
+plot_dat <-  d |> 
+    filter(ar >= 2010) |> 
+    mutate(fjolskyldur_per_ibud = fjolskyldur / fullbuid) |> 
+    mutate(label = ifelse(ar == max(ar), sveitarfelag, NA_character_),
+           x = ar,
+           y = fjolskyldur_per_ibud,
+           y = case_when(sveitarfelag == "Mosfellsbær" ~ y ,
+                         sveitarfelag == "Kópavogsbær" ~ y - 0.007,
+                         sveitarfelag == "Garðabær" ~ y,
+                         sveitarfelag == "Reykjavíkurborg" ~ y + 0.006,
+                         sveitarfelag == "Hafnarfjarðarkaupstaður" ~ y,
+                         sveitarfelag == "Seltjarnarnesbær" ~ y,
+                         TRUE ~ y))
+
+p <- plot_dat |> 
+    ggplot(aes(ar, fjolskyldur_per_ibud)) +
+    # geom_line(data = plot_dat_alls, col = "grey50") +
+    # geom_point(data = plot_dat_alls, col = "grey50") +
+    # geom_text(data = plot_dat_alls |>  filter(ar == max(ar)),
+    #           aes(label = label, x = x, y = y), col = "grey50", nudge_x = 0.1, hjust = 0, size = 4) +
+    geom_line(aes(col = sveitarfelag)) +
+    geom_point(aes(col = sveitarfelag)) +
+    geom_text(data = plot_dat |> group_by(sveitarfelag) |> filter(ar == max(ar)),
+              aes(label = label, x = x, y = y, col = label), nudge_x = 0.1, hjust = 0, size = 4) +
+    geom_rangeframe() +
+    scale_x_continuous(limits = c(2010, 2024.3),
+                       breaks = 2010:2022) +
+    scale_y_continuous(labels = label_number(accuracy = 0.01),
+                       breaks = c(range(plot_dat$fjolskyldur_per_ibud), 1.2, 1.3, 1.4, 1.5)) +
+    scale_colour_brewer(type = "qual", palette = "Dark2") +
+    theme_tufte() +
+    theme(legend.position = "none") +
+    labs(x = NULL,
+         y = NULL,
+         title = "Fjölskyldur á hverja íbúð (sér- og fjölbýli) í sveitarfélögum Höfuðborgarsvæðisins (2010 - 2022)",
+         caption = "Kóði og gögn: https://github.com/bgautijonsson/fasteignafjoldi")
+
+p
+
+ggsave(plot = p,
+       filename = "fjolskyldur_per_fasteign.png",
+       width = 8, height = 0.5 * 8, scale = 1.3, bg = "white")
+```
+
+## Nýjar íbúðir á mannfjölda
 
 ```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
 plot_dat <- d |> 
@@ -115,16 +280,489 @@ p <- plot_dat |>
                             label = "48.5"),
               aes(col = sveitarfelag, label = label), size = 3.5) +
     metR::geom_arrow(data = tibble(sveitarfelag = "Mosfellsbær",
-                            x = 2014.6, y = 21.5,
-                            dx = 0.35,
-                            dy = 0.5),
-               aes(x = x, y = y, dx = dx, dy = dy, col = sveitarfelag), size = 0.4) +
+                                   x = 2014.6, y = 21.5,
+                                   dx = 0.35,
+                                   dy = 0.5),
+                     aes(x = x, y = y, dx = dx, dy = dy, col = sveitarfelag), size = 0.4) +
     scale_x_continuous(limits = c(2010, 2021),
                        breaks = c(2010, 2014, 2018, 2021)) +
     scale_y_continuous(labels = label_number(accuracy = 0.1),
-                  breaks = c(range(plot_dat$nyjar_fullbunar), 0, 5, 15, 24.4),
-                  limits = c(-1.8, 49),
+                       breaks = c(range(plot_dat$nyjar_fullbunar), 0, 5, 15, 24.4),
+                       limits = c(-1.8, 49),
+                       expand = expansion()) +
+    scale_colour_brewer(type = "qual", palette = "Dark2") +
+    coord_cartesian(ylim = c(-1.8, 25)) +
+    facet_wrap("sveitarfelag") +
+    theme_tufte() +
+    theme(legend.position = "none", strip.background = element_rect(fill = "grey95")) +
+    labs(x = NULL,
+         y = NULL,
+         title = "Nýjar fullbúnar íbúðir (sér- og fjölbýli) per 1.000 manns í sveitarfélögum Höfuðborgarsvæðisins",
+         caption = "Kóði og gögn: https://github.com/bgautijonsson/fasteignafjoldi")
+
+p
+
+ggsave(plot = p,
+       filename = "nyjar_fullbunar_hofdatolu.png",
+       width = 8, height = 0.5 * 8, scale = 1.3, bg = "white")
+```
+
+```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
+plot_dat <- d |> 
+    filter(ar >= 2014) |> 
+    group_by(sveitarfelag) |> 
+    mutate(nyjar_fullbunar = c(0, diff(fullbuid)) / mannfjoldi * 1000,
+           cumsum_nyjar_fullbunar = cumsum(nyjar_fullbunar)) |> 
+    ungroup() |> 
+    filter(ar >= 2010, ar < 2022) |> 
+    mutate(label = ifelse(ar == max(ar), sveitarfelag, NA_character_),
+           x = ar,
+           y = cumsum_nyjar_fullbunar,
+           y = case_when(sveitarfelag == "Mosfellsbær" ~ y ,
+                         sveitarfelag == "Kópavogsbær" ~ y,
+                         sveitarfelag == "Garðabær" ~ y,
+                         sveitarfelag == "Reykjavíkurborg" ~ y,
+                         sveitarfelag == "Hafnarfjarðarkaupstaður" ~ y,
+                         sveitarfelag == "Seltjarnarnesbær" ~ y,
+                         TRUE ~ y))
+
+
+p <- plot_dat |> 
+    ggplot(aes(ar, cumsum_nyjar_fullbunar)) +
+    geom_hline(yintercept = 0, lty = 2, alpha = 0.6) +
+    geom_line(data = plot_dat |> rename(svf = sveitarfelag), aes(group = svf), col = "grey50", alpha = 0.3, size = 0.5) +
+    # geom_point(data = plot_dat |> rename(svf = sveitarfelag), aes(group = svf), col = "grey50", alpha = 0.5) +
+    geom_line(aes(col = sveitarfelag)) +
+    geom_point(aes(col = sveitarfelag)) +
+    # geom_text(data = plot_dat |> group_by(sveitarfelag) |> filter(ar == max(ar)),
+    #           aes(label = label, x = x, y = y, col = label), nudge_x = 0.1, hjust = 0, size = 4) +
+    geom_rangeframe() +
+    # geom_text(data = tibble(sveitarfelag = "Mosfellsbær",
+    #                         ar = 2014.2,
+    #                         nyjar_fullbunar = 18.9,
+    #                         label = "48.5"),
+    #           aes(col = sveitarfelag, label = label), size = 3.5) +
+    # metR::geom_arrow(data = tibble(sveitarfelag = "Mosfellsbær",
+    #                                x = 2014.6, y = 21.5,
+    #                                dx = 0.35,
+    #                                dy = 0.5),
+    #                  aes(x = x, y = y, dx = dx, dy = dy, col = sveitarfelag), size = 0.4) +
+    scale_x_continuous(limits = c(2014, 2021),
+                       breaks = c(2010, 2014, 2018, 2021)) +
+    scale_y_continuous(labels = label_number(accuracy = 0.1),
+                       breaks = c(range(plot_dat$cumsum_nyjar_fullbunar)),
+                       # limits = c(-1.8, 49),
+                       expand = expansion()) +
+    scale_colour_brewer(type = "qual", palette = "Dark2") +
+    # coord_cartesian(ylim = c(-1.8, 25)) +
+    facet_wrap("sveitarfelag") +
+    theme_tufte() +
+    theme(legend.position = "none", strip.background = element_rect(fill = "grey95")) +
+    labs(x = NULL,
+         y = NULL,
+         title = "Nýjar fullbúnar íbúðir (sér- og fjölbýli) per 1.000 manns í sveitarfélögum Höfuðborgarsvæðisins",
+         caption = "Kóði og gögn: https://github.com/bgautijonsson/fasteignafjoldi")
+
+p
+
+ggsave(plot = p,
+       filename = "uppsafnad_nyjar_fullbunar_hofdatolu.png",
+       width = 8, height = 0.5 * 8, scale = 1.3, bg = "white")
+```
+
+### Árleg breyting í íbúðum og fjölskyldum
+
+```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
+p <- d |> 
+    filter(ar >= 2010) |> 
+    group_by(sveitarfelag) |> 
+    mutate(Fasteignir =  c(1, exp(diff(log(fullbuid)))),
+           Fjölskyldur =  c(1, exp(diff(log(fjolskyldur))))) |> 
+    ungroup() |> 
+    select(-fullbuid, -ofullbuid, -mannfjoldi ,-fjolskyldur) |> 
+    pivot_longer(c(-ar, -sveitarfelag)) |> 
+    filter(ar >= 2010, ar < 2022) |> 
+    ggplot(aes(ar, value)) +
+    geom_hline(yintercept = 1, lty = 2, alpha = 0.6) +
+    geom_area(aes(fill  = name), alpha = 0.3, position = "identity") +
+    geom_line(aes(col = name)) +
+    # geom_point(aes(col = name)) +
+    # geom_segment(aes(col = name, xend = x, yend = 1)) +
+    scale_x_continuous(breaks = c(2010, 2012, 2014, 2016, 2018, 2021)) +
+    scale_y_log10(labels = function(x)  percent(x - 1),
                   expand = expansion()) +
+    scale_colour_brewer(type = "qual", palette = "Set1") +
+    scale_fill_brewer(type = "qual", palette = "Set1") +
+    facet_wrap("sveitarfelag", nrow = 2,  scales = "free") +
+    theme_half_open() +
+    theme(legend.position = "top") +
+    labs(title = "Árleg breyting í fjölda íbúða (sér- og fjölbýli) og fjölskyldna í sveitarfélögum Höfuðborgarsvæðisins",
+         x = NULL,
+         y = NULL,
+         fill= NULL,
+         col = NULL)
+
+p
+
+ggsave(plot = p,
+       filename = "hlutf_breyting_fasteignir_fjolskyldur.png",
+       width = 8, height = 0.5 * 8, scale = 2, bg = "white")
+```
+
+### Uppsöfnuð
+
+```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
+p <- d |> 
+    group_by(sveitarfelag) |> 
+    filter(ar >= 2010) |> 
+    mutate(Fasteignir =  c(1, exp(cumsum(diff(log(fullbuid))))),
+           Fjölskyldur =  c(1, exp(cumsum(diff(log(fjolskyldur)))))) |> 
+    ungroup() |> 
+    select(-fullbuid, -ofullbuid, -mannfjoldi, -fjolskyldur) |> 
+    pivot_longer(c(-ar, -sveitarfelag)) |> 
+    filter(ar >= 2010, ar < 2022) |> 
+    ggplot(aes(ar, value)) +
+    geom_hline(yintercept = 1, lty = 2, alpha = 0.6) +
+    geom_area(aes(fill  = name), alpha = 0.3, position = "identity") +
+    geom_line(aes(col = name)) +
+    # geom_point(aes(col = name)) +
+    # geom_segment(aes(col = name, xend = x, yend = 1)) +
+    scale_x_continuous(breaks = c(2010, 2012, 2014, 2016, 2018, 2021)) +
+    scale_y_log10(labels = function(x)  percent(x - 1),
+                  expand = expansion()) +
+    scale_colour_brewer(type = "qual", palette = "Set1") +
+    scale_fill_brewer(type = "qual", palette = "Set1") +
+    facet_wrap("sveitarfelag", nrow = 2) +
+    theme_half_open() +
+    theme(legend.position = "top") +
+    labs(title = "Uppsöfnuð breyting í fjölda íbúða (sér- og fjölbýli) og fjölskyldna í sveitarfélögum Höfuðborgarsvæðisins",
+         x = NULL,
+         y = NULL,
+         fill= NULL,
+         col = NULL)
+
+p
+
+ggsave(plot = p,
+       filename = "hlutf_uppsöfnuð_breyting_fasteignir_fjolskyldur.png",
+       width = 8, height = 0.5 * 8, scale = 2, bg = "white")
+```
+
+
+## Fasteignafjöldi á íbúa
+
+
+```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
+plot_dat <-  d |> 
+    filter(ar >= 2010) |> 
+    mutate(fjolskyldur_per_ibud = fjolskyldur / fullbuid) |> 
+    mutate(label = ifelse(ar == max(ar), sveitarfelag, NA_character_),
+           x = ar,
+           y = fjolskyldur_per_ibud,
+           y = case_when(sveitarfelag == "Mosfellsbær" ~ y ,
+                         sveitarfelag == "Kópavogsbær" ~ y,
+                         sveitarfelag == "Garðabær" ~ y,
+                         sveitarfelag == "Reykjavíkurborg" ~ y,
+                         sveitarfelag == "Hafnarfjarðarkaupstaður" ~ y  - 0.008,
+                         sveitarfelag == "Seltjarnarnesbær" ~ y + 0.008,
+                         TRUE ~ y))
+
+p <- plot_dat |> 
+    ggplot(aes(ar, fjolskyldur_per_ibud)) +
+    geom_line(aes(col = sveitarfelag)) +
+    geom_point(aes(col = sveitarfelag)) +
+    geom_text(data = plot_dat |> group_by(sveitarfelag) |> filter(ar == max(ar)),
+              aes(label = label, x = x, y = y, col = label), nudge_x = 0.1, hjust = 0, size = 4) +
+    geom_rangeframe() +
+    scale_x_continuous(limits = c(2010, 2024.3),
+                       breaks = 2010:2022) +
+    scale_y_continuous(labels = label_number(),
+                       breaks = c(range(plot_dat$fjolskyldur_per_ibud), 2.5, 2.75)) +
+    scale_colour_brewer(type = "qual", palette = "Dark2") +
+    theme_tufte() +
+    theme(legend.position = "none") +
+    labs(x = NULL,
+         y = NULL,
+         title = "Fjöldi fjölskyldna á íbúð (sér- og fjölbýli) í sveitarfélögum Höfuðborgarsvæðisins (2010 - 2022)",
+         caption = "Kóði og gögn: https://github.com/bgautijonsson/fasteignafjoldi")
+
+p
+
+ggsave(plot = p,
+       filename = "fjolskyldur_per_fasteign.png",
+       width = 8, height = 0.5 * 8, scale = 1.3, bg = "white")
+```
+
+### Breyting frá 2010
+
+#### Hlutfallsleg
+
+```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
+plot_dat_alls <- d |> 
+    filter(ar >= 2010) |> 
+    group_by(ar) |> 
+    summarise(fullbuid = sum(fullbuid),
+              fjolskyldur = sum(fjolskyldur),
+              .groups = "drop") |> 
+    mutate(fjolskyldur_per_ibud = fjolskyldur / fullbuid,
+           hlutf_aukning = fjolskyldur_per_ibud / fjolskyldur_per_ibud[ar == min(ar)],
+           x = ar,
+           y = hlutf_aukning - 0.002,
+           label = "Höfuðborgarsvæðið")
+
+plot_dat <-  d |> 
+    filter(ar >= 2010) |> 
+    mutate(fjolskyldur_per_ibud = fjolskyldur / fullbuid) |> 
+    group_by(sveitarfelag) |> 
+    mutate(hlutf_aukning = fjolskyldur_per_ibud / fjolskyldur_per_ibud[ar == min(ar)]) |> 
+    ungroup() |> 
+    mutate(label = ifelse(ar == max(ar), sveitarfelag, NA_character_),
+           x = ar,
+           y = hlutf_aukning,
+           y = case_when(sveitarfelag == "Mosfellsbær" ~ y ,
+                         sveitarfelag == "Kópavogsbær" ~ y + 0.0005,
+                         sveitarfelag == "Garðabær" ~ y,
+                         sveitarfelag == "Reykjavíkurborg" ~ y,
+                         sveitarfelag == "Hafnarfjarðarkaupstaður" ~ y,
+                         sveitarfelag == "Seltjarnarnesbær" ~ y + 0.002,
+                         TRUE ~ y))
+
+p <- plot_dat |> 
+    ggplot(aes(ar, hlutf_aukning)) +
+    geom_line(data = plot_dat_alls, col = "grey50") +
+    geom_point(data = plot_dat_alls, col = "grey50") +
+    geom_text(data = plot_dat_alls |>  filter(ar == max(ar)),
+              aes(label = label, x = x, y = y), col = "grey50", nudge_x = 0.1, hjust = 0, size = 4) +
+    geom_hline(yintercept = 1, lty = 2, alpha = 0.5) +
+    geom_line(aes(col = sveitarfelag)) +
+    geom_point(aes(col = sveitarfelag)) +
+    geom_text(data = plot_dat |> group_by(sveitarfelag) |> filter(ar == max(ar)),
+              aes(label = label, x = x, y = y, col = label), nudge_x = 0.1, hjust = 0, size = 4) +
+    geom_rangeframe() +
+    scale_x_continuous(limits = c(2010, 2024.3),
+                       breaks = 2010:2022) +
+    scale_y_log10(labels = function(x) percent(x - 1),
+                  breaks = c(range(plot_dat$hlutf_aukning), 1, 1.05, 1.1, 1.15, 1.2)) +
+    scale_colour_brewer(type = "qual", palette = "Dark2") +
+    theme_tufte() +
+    theme(legend.position = "none") +
+    labs(x = NULL,
+         y = NULL,
+         title = "Breyting í fjölda fjölskyldna á íbúð í sveitarfélögum höfuðborgarsvæðisins (2010 - 2022)",
+         subtitle = "Fjölskylda getur verið einstaklingur, par með eða án barna, eða einhleypt foreldri og börn",
+         caption = "Kóði og gögn: https://github.com/bgautijonsson/fasteignafjoldi")
+
+p
+
+ggsave(plot = p,
+       filename = "fjolskyldur_a_ibud_hlutf_aukning_2010.png",
+       width = 8, height = 0.5 * 8, scale = 1.3, bg = "white")
+```
+
+
+### Breyting frá 2018
+
+#### Hlutfallsleg
+
+```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
+plot_dat_alls <- d |> 
+    filter(ar >= 2018) |> 
+    group_by(ar) |> 
+    summarise(fullbuid = sum(fullbuid),
+              fjolskyldur = sum(fjolskyldur),
+              .groups = "drop") |> 
+    mutate(fjolskyldur_per_ibud = fjolskyldur / fullbuid,
+           hlutf_aukning = fjolskyldur_per_ibud / fjolskyldur_per_ibud[ar == min(ar)],
+           x = ar,
+           y = hlutf_aukning - 0.002,
+           label = "Höfuðborgarsvæðið")
+
+plot_dat <-  d |> 
+    filter(ar >= 2018) |> 
+    mutate(fjolskyldur_per_ibud = fjolskyldur / fullbuid) |> 
+    group_by(sveitarfelag) |> 
+    mutate(hlutf_aukning = fjolskyldur_per_ibud / fjolskyldur_per_ibud[ar == min(ar)]) |> 
+    ungroup() |> 
+    mutate(label = ifelse(ar == max(ar), sveitarfelag, NA_character_),
+           x = ar,
+           y = hlutf_aukning,
+           y = case_when(sveitarfelag == "Mosfellsbær" ~ y ,
+                         sveitarfelag == "Kópavogsbær" ~ y + 0.004,
+                         sveitarfelag == "Garðabær" ~ y,
+                         sveitarfelag == "Reykjavíkurborg" ~ y + 0.001,
+                         sveitarfelag == "Hafnarfjarðarkaupstaður" ~ y,
+                         sveitarfelag == "Seltjarnarnesbær" ~ y,
+                         TRUE ~ y))
+
+p <- plot_dat |> 
+    ggplot(aes(ar, hlutf_aukning)) +
+    geom_line(data = plot_dat_alls, col = "grey50") +
+    geom_point(data = plot_dat_alls, col = "grey50") +
+    geom_text(data = plot_dat_alls |>  filter(ar == max(ar)),
+              aes(label = label, x = x, y = y), col = "grey50", nudge_x = 0.1, hjust = 0, size = 4) +
+    geom_hline(yintercept = 1, lty = 2, alpha = 0.5) +
+    geom_line(aes(col = sveitarfelag)) +
+    geom_point(aes(col = sveitarfelag)) +
+    geom_text(data = plot_dat |> group_by(sveitarfelag) |> filter(ar == max(ar)),
+              aes(label = label, x = x, y = y, col = label), nudge_x = 0.1, hjust = 0, size = 4) +
+    geom_rangeframe() +
+    scale_x_continuous(limits = c(2018, 2022.8),
+                       breaks = 2018:2022) +
+    scale_y_log10(labels = function(x) percent(x - 1),
+                  breaks = c(range(plot_dat$hlutf_aukning), 1, 1.05, 1.1, 1.15, 1.2)) +
+    scale_colour_brewer(type = "qual", palette = "Dark2") +
+    theme_tufte() +
+    theme(legend.position = "none") +
+    labs(x = NULL,
+         y = NULL,
+         title = "Breyting í fjölda fjölskyldna á íbúð í sveitarfélögum höfuðborgarsvæðisins (2018 - 2022)",
+         subtitle = "Fjölskylda getur verið einstaklingur, par með eða án barna, eða einhleypt foreldri og börn",
+         caption = "Kóði og gögn: https://github.com/bgautijonsson/fasteignafjoldi")
+
+p
+
+ggsave(plot = p,
+       filename = "fjolskyldur_a_ibud_hlutf_aukning_2018.png",
+       width = 8, height = 0.5 * 8, scale = 1.3, bg = "white")
+```
+
+```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
+
+plot_dat <-  d |> 
+    filter(ar >= 2018) |> 
+    mutate(fjoskyldur_per_ibud = fjolskyldur / fullbuid) |> 
+    group_by(sveitarfelag) |> 
+    mutate(aukning = fjoskyldur_per_ibud / fjoskyldur_per_ibud[ar == min(ar)] - 1) |> 
+    ungroup() |> 
+    filter(ar == max(ar)) |> 
+    mutate(label = ifelse(ar == max(ar), sveitarfelag, NA_character_),
+           x = ar,
+           y = aukning,
+           y = case_when(sveitarfelag == "Mosfellsbær" ~ y ,
+                         sveitarfelag == "Kópavogsbær" ~ y - 0.003,
+                         sveitarfelag == "Garðabær" ~ y,
+                         sveitarfelag == "Reykjavíkurborg" ~ y + 0.004,
+                         sveitarfelag == "Hafnarfjarðarkaupstaður" ~ y,
+                         sveitarfelag == "Seltjarnarnesbær" ~ y,
+                         TRUE ~ y)) |> 
+    mutate(sveitarfelag1 = fct_reorder(sveitarfelag, aukning))
+
+p <- plot_dat |> 
+    ggplot(aes(sveitarfelag1, aukning)) +
+    geom_hline(yintercept = 0, lty = 2, alpha = 0.5) +
+    geom_col(aes(fill = sveitarfelag)) +
+    geom_rangeframe() +
+    scale_y_continuous(labels = label_percent(),
+                       breaks = c(-0.024, -0.015, 0.005, 0.02, 0.135),
+                       expand = expansion(mult = 0.01)) +
+    scale_fill_brewer(type = "qual", palette = "Dark2") +
+    theme_tufte() +
+    theme(legend.position = "none",
+          axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1)) +
+    labs(x = NULL,
+         y = NULL,
+         title = "Breyting í fjölda fjölskyldna á íbúð í sveitarfélögum höfuðborgarsvæðisins (2018 - 2022)",
+         subtitle = "Fjölskylda getur verið einstaklingur, par með eða án barna, eða einhleypt foreldri og börn",)
+
+p
+
+ggsave(plot = p,
+       filename = "fjolskyldur_a_ibud_hlutf_aukning_2018_cols.png",
+       width = 8, height = 0.5 * 8, scale = 1.3, bg = "white")
+```
+
+## Fjölgun fasteigna
+
+### Hrein
+
+```{r}
+d |> 
+    group_by(sveitarfelag) |> 
+    mutate(nyjar_fullbunar = c(0, diff(fullbuid)))
+```
+
+
+```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
+plot_dat <- d |> 
+    filter(ar %in% c(2018, 2022)) |> 
+    select(ar, sveitarfelag, fullbuid) |> 
+    mutate(ar = ifelse(ar == min(ar), "fyrir", "eftir")) |> 
+    pivot_wider(names_from = ar, values_from = fullbuid) |> 
+    mutate(aukning = eftir / fyrir - 1) |> 
+    mutate(sveitarfelag1 = fct_reorder(sveitarfelag, aukning))
+
+p <- plot_dat |> 
+    ggplot(aes(sveitarfelag1, aukning)) +
+    # geom_hline(yintercept = 0, lty = 2, alpha = 0.5) +
+    geom_col(aes(fill = sveitarfelag)) +
+    geom_rangeframe() +
+    scale_y_continuous(labels = label_percent(),
+                       breaks = c(plot_dat$aukning),
+                       expand = expansion(mult = 0)) +
+    scale_fill_brewer(type = "qual", palette = "Dark2") +
+    theme_tufte() +
+    theme(legend.position = "none",
+          axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1)) +
+    labs(x = NULL,
+         y = NULL,
+         title = "Breyting í fjölda íbúða (sér- og fjölbýli) í sveitarfélögum höfuðborgarsvæðisins (2018 - 2022)")
+
+p
+
+ggsave(plot = p,
+       filename = "ibudir_hlutf_aukning_2018_cols.png",
+       width = 8, height = 0.5 * 8, scale = 1.3, bg = "white")
+```
+
+
+### Á fjölskyldu
+
+### Á höfðatölu
+
+```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
+plot_dat <- d |> 
+    group_by(sveitarfelag) |> 
+    mutate(nyjar_fullbunar = c(0, diff(fullbuid)) / fjolskyldur) |> 
+    ungroup() |> 
+    filter(ar >= 2010, ar < 2022) |> 
+    mutate(label = ifelse(ar == max(ar), sveitarfelag, NA_character_),
+           x = ar,
+           y = nyjar_fullbunar,
+           y = case_when(sveitarfelag == "Mosfellsbær" ~ y ,
+                         sveitarfelag == "Kópavogsbær" ~ y,
+                         sveitarfelag == "Garðabær" ~ y,
+                         sveitarfelag == "Reykjavíkurborg" ~ y,
+                         sveitarfelag == "Hafnarfjarðarkaupstaður" ~ y,
+                         sveitarfelag == "Seltjarnarnesbær" ~ y,
+                         TRUE ~ y))
+
+
+p <- plot_dat |> 
+    ggplot(aes(ar, nyjar_fullbunar)) +
+    geom_hline(yintercept = 0, lty = 2, alpha = 0.6) +
+    geom_line(data = plot_dat |> rename(svf = sveitarfelag), aes(group = svf), col = "grey50", alpha = 0.3, size = 0.5) +
+    # geom_point(data = plot_dat |> rename(svf = sveitarfelag), aes(group = svf), col = "grey50", alpha = 0.5) +
+    geom_line(aes(col = sveitarfelag)) +
+    geom_point(aes(col = sveitarfelag)) +
+    # geom_text(data = plot_dat |> group_by(sveitarfelag) |> filter(ar == max(ar)),
+    #           aes(label = label, x = x, y = y, col = label), nudge_x = 0.1, hjust = 0, size = 4) +
+    geom_rangeframe() +
+    geom_text(data = tibble(sveitarfelag = "Mosfellsbær",
+                            ar = 2014.2,
+                            nyjar_fullbunar = 18.9,
+                            label = "48.5"),
+              aes(col = sveitarfelag, label = label), size = 3.5) +
+    metR::geom_arrow(data = tibble(sveitarfelag = "Mosfellsbær",
+                                   x = 2014.6, y = 21.5,
+                                   dx = 0.35,
+                                   dy = 0.5),
+                     aes(x = x, y = y, dx = dx, dy = dy, col = sveitarfelag), size = 0.4) +
+    scale_x_continuous(limits = c(2010, 2021),
+                       breaks = c(2010, 2014, 2018, 2021)) +
+    scale_y_continuous(labels = label_number(accuracy = 0.1),
+                       breaks = c(range(plot_dat$nyjar_fullbunar), 0, 5, 15, 24.4),
+                       limits = c(-1.8, 49),
+                       expand = expansion()) +
     scale_colour_brewer(type = "qual", palette = "Dark2") +
     coord_cartesian(ylim = c(-1.8, 25)) +
     facet_wrap("sveitarfelag") +
@@ -162,7 +800,7 @@ p <- d |>
     # geom_segment(aes(col = name, xend = x, yend = 1)) +
     scale_x_continuous(breaks = c(2010, 2012, 2014, 2016, 2018, 2021)) +
     scale_y_log10(labels = function(x)  percent(x - 1),
-                       expand = expansion()) +
+                  expand = expansion()) +
     scale_colour_brewer(type = "qual", palette = "Set1") +
     scale_fill_brewer(type = "qual", palette = "Set1") +
     facet_wrap("sveitarfelag", nrow = 2,  scales = "free") +
@@ -200,7 +838,7 @@ p <- d |>
     # geom_segment(aes(col = name, xend = x, yend = 1)) +
     scale_x_continuous(breaks = c(2010, 2012, 2014, 2016, 2018, 2021)) +
     scale_y_log10(labels = function(x)  percent(x - 1),
-                       expand = expansion()) +
+                  expand = expansion()) +
     scale_colour_brewer(type = "qual", palette = "Set1") +
     scale_fill_brewer(type = "qual", palette = "Set1") +
     facet_wrap("sveitarfelag", nrow = 2) +
@@ -230,27 +868,27 @@ plot_dat_alls <- d |>
     summarise(fullbuid = sum(fullbuid),
               mannfjoldi = sum(mannfjoldi),
               .groups = "drop") |> 
-    mutate(fullbuid_per_ibui = fullbuid / mannfjoldi * 1000,
+    mutate(ibuar_per_ibud = mannfjoldi / fullbuid,
            x = ar,
-           y = fullbuid_per_ibui,
+           y = ibuar_per_ibud,
            label = "Höfuðborgarsvæðið")
 
 plot_dat <-  d |> 
     filter(ar >= 2010) |> 
-    mutate(fullbuid_per_ibui = fullbuid / mannfjoldi * 1000) |> 
+    mutate(ibuar_per_ibud = mannfjoldi / fullbuid) |> 
     mutate(label = ifelse(ar == max(ar), sveitarfelag, NA_character_),
            x = ar,
-           y = fullbuid_per_ibui,
+           y = ibuar_per_ibud,
            y = case_when(sveitarfelag == "Mosfellsbær" ~ y ,
                          sveitarfelag == "Kópavogsbær" ~ y,
                          sveitarfelag == "Garðabær" ~ y,
                          sveitarfelag == "Reykjavíkurborg" ~ y,
-                         sveitarfelag == "Hafnarfjarðarkaupstaður" ~ y + 1,
-                         sveitarfelag == "Seltjarnarnesbær" ~ y - 1,
+                         sveitarfelag == "Hafnarfjarðarkaupstaður" ~ y  - 0.008,
+                         sveitarfelag == "Seltjarnarnesbær" ~ y + 0.008,
                          TRUE ~ y))
 
 p <- plot_dat |> 
-    ggplot(aes(ar, fullbuid_per_ibui)) +
+    ggplot(aes(ar, ibuar_per_ibud)) +
     geom_line(data = plot_dat_alls, col = "grey50") +
     geom_point(data = plot_dat_alls, col = "grey50") +
     geom_text(data = plot_dat_alls |>  filter(ar == max(ar)),
@@ -262,21 +900,20 @@ p <- plot_dat |>
     geom_rangeframe() +
     scale_x_continuous(limits = c(2010, 2024.3),
                        breaks = 2010:2022) +
-    scale_y_log10(labels = label_number(),
-                  breaks = c(range(plot_dat$fullbuid_per_ibui), 375, 400)) +
+    scale_y_continuous(labels = label_number(),
+                       breaks = c(range(plot_dat$ibuar_per_ibud), 2.5, 2.75)) +
     scale_colour_brewer(type = "qual", palette = "Dark2") +
     theme_tufte() +
     theme(legend.position = "none") +
     labs(x = NULL,
          y = NULL,
-         title = "Fjöldi íbúða (sér- og fjölbýli) á 1.000 íbúa í sveitarfélögum Höfuðborgarsvæðisins (2010 - 2022)",
-         subtitle = "Líka borið saman við fjöldann á Höfuðborgarsvæðinu í heild",
+         title = "Meðalfjöldi íbúa í íbúðum (sér- og fjölbýli) sveitarfélaga Höfuðborgarsvæðisins (2010 - 2022)",
          caption = "Kóði og gögn: https://github.com/bgautijonsson/fasteignafjoldi")
 
 p
 
 ggsave(plot = p,
-       filename = "fasteignir_a_mannfjolda.png",
+       filename = "manneskjur_per_fasteign.png",
        width = 8, height = 0.5 * 8, scale = 1.3, bg = "white")
 ```
 
@@ -329,7 +966,7 @@ p <- plot_dat |>
     scale_x_continuous(limits = c(2010, 2024.3),
                        breaks = 2010:2022) +
     scale_y_continuous(labels = function(x) percent(x - 1),
-                  breaks = c(range(plot_dat$hlutf_aukning), 0.95, 1, 1.05)) +
+                       breaks = c(range(plot_dat$hlutf_aukning), 0.95, 1, 1.05)) +
     scale_colour_brewer(type = "qual", palette = "Dark2") +
     theme_tufte() +
     theme(legend.position = "none") +
@@ -396,7 +1033,7 @@ p <- plot_dat |>
     scale_x_continuous(limits = c(2018, 2022.9),
                        breaks = 2010:2022) +
     scale_y_continuous(labels = function(x) percent(x - 1),
-                  breaks = c(range(plot_dat$hlutf_aukning), 0.95, 1, 1.05)) +
+                       breaks = c(range(plot_dat$hlutf_aukning), 0.95, 1, 1.05)) +
     scale_colour_brewer(type = "qual", palette = "Dark2") +
     theme_tufte() +
     theme(legend.position = "none") +
@@ -504,7 +1141,7 @@ p <- plot_dat |>
     scale_x_continuous(limits = c(2018, 2022.75),
                        breaks = 2010:2022) +
     scale_y_continuous(labels = label_number(),
-                  breaks = c(range(plot_dat$aukning), -20, 0)) +
+                       breaks = c(range(plot_dat$aukning), -20, 0)) +
     scale_colour_brewer(type = "qual", palette = "Dark2") +
     theme_tufte() +
     theme(legend.position = "none") +
@@ -577,3 +1214,328 @@ ggsave(plot = p,
        filename = "fasteignir_a_mannfjolda_aukning_2018_cols.png",
        width = 8, height = 0.5 * 8, scale = 1.3, bg = "white")
 ```
+
+
+## Ófullbúið
+
+```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
+plot_dat <- d |> 
+    filter(ar >= 2010) |> 
+    mutate(hlutf = ofullbuid / mannfjoldi * 1000) |> 
+    mutate(label = ifelse(ar == max(ar), sveitarfelag, NA_character_),
+           x = ar,
+           y = hlutf,
+           y = case_when(sveitarfelag == "Mosfellsbær" ~ y  - 0.5,
+                         sveitarfelag == "Kópavogsbær" ~ y,
+                         sveitarfelag == "Garðabær" ~ y,
+                         sveitarfelag == "Reykjavíkurborg" ~ y + 0.5,
+                         sveitarfelag == "Hafnarfjarðarkaupstaður" ~ y,
+                         sveitarfelag == "Seltjarnarnesbær" ~ y,
+                         TRUE ~ y))
+
+p <- plot_dat |> 
+    ggplot(aes(ar, hlutf)) +
+    geom_line(aes(col = sveitarfelag)) +
+    geom_text(data = plot_dat |> group_by(sveitarfelag) |> filter(ar == max(ar)),
+              aes(label = label, x = x, y = y, col = label), nudge_x = 0.05, hjust = 0, size = 4) +
+    geom_rangeframe() + 
+    scale_x_continuous(limits = c(2010, 2024.1),
+                       breaks = 2010:2022) +
+    scale_y_continuous(labels = label_number(accuracy = 1),
+                       breaks = c(range(plot_dat$hlutf), 10, 20, 30, 40)) +
+    scale_colour_brewer(type = "qual", palette = "Dark2") +
+    theme_tufte() +
+    theme(legend.position = "none") +
+    labs(x = NULL,
+         y = NULL,
+         title = "Ófullbúnar íbúðir á 1.000 íbúa sveitarfélaga höfuðborgarsvæðisins")
+
+p
+
+ggsave(plot = p,
+       filename = "ofullbunar_a_mannfjolda.png",
+       width = 8, height = 0.5 * 8, scale = 1.3, bg = "white")
+```
+
+# Fyrstu kaupendur
+
+## Aldur
+
+```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
+d |> 
+    filter(ar >= 2010) |> 
+    ggplot(aes(ar, fyrstu_kaupendur)) +
+    geom_line(aes(col = sveitarfelag)) +
+    geom_rangeframe() +
+    scale_colour_brewer(type = "qual", palette = "Dark2") +
+    theme_tufte() +
+    theme(legend.position = "none")
+```
+
+
+# Kaupskra
+
+```{r}
+kaupskra <- read_csv2("kaupskra.csv") |> 
+    semi_join(d,
+              by = "sveitarfelag") |> 
+    filter(tegund %in% c("Serbyli", "Fjolbyli"),
+           onothaefur_samningur == 0)
+
+visitala <- pxweb_get(
+    url ="https://px.hagstofa.is:443/pxis/api/v1/is/Efnahagur/visitolur/1_vnv/1_vnv/VIS01000.px", 
+    query = list(
+        "Mánuður" = c("*"),
+        "Vísitala"  = c("CPI"),
+        "Liður" = c("index")
+    ),
+    verbose = FALSE
+) |> 
+    as.data.frame() |> 
+    as_tibble() |> 
+    janitor::clean_names() |> 
+    separate(manudur, into = c("ar", "manudur"), sep = "M", convert = T) |> 
+    mutate(manudur = str_pad(manudur, width = 2, side = "left", pad = "0"),
+           date = str_c(ar, "-", manudur, "-01") |> ymd()) |> 
+    select(-manudur, -ar, -visitala, -lidur) |> 
+    mutate(ar = year(date)) |> 
+    group_by(ar) |> 
+    filter(date == min(date)) |> 
+    ungroup() |> 
+    mutate(visitala_2022 = visitala_neysluverds / visitala_neysluverds[ar == 2022]) |> 
+    select(-date, -visitala_neysluverds)
+```
+
+```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
+kaupskra |> 
+    mutate(utgdag = dmy_hm(utgdag),
+           ar = year(utgdag)) |> 
+    filter(byggar >= ar - 10) |> 
+    select(sveitarfelag, ar, kaupverd) |> 
+    mutate(kaupverd = cut(kaupverd/1000,
+                          breaks = c(-Inf, 30, 40, 50, 60, 70, 80, 90, 100, Inf),
+                          include.lowest = TRUE, right = FALSE)) |> 
+    count(sveitarfelag, ar, kaupverd) |> 
+    group_by(sveitarfelag, ar) |> 
+    mutate(p = n / sum(n)) |> 
+    ungroup() |> 
+    filter(ar == 2021) |> 
+    ggplot() +
+    geom_ridgeline(aes(x = kaupverd, y = sveitarfelag, fill = sveitarfelag, height = p,
+                       group = paste(sveitarfelag)), 
+                   scale = 5, alpha = 0.4) +
+    # facet_wrap("sveitarfelag", nrow = 2) +
+    theme_half_open() +
+    theme(legend.position = "none") +
+    labs(x = NULL, y = NULL)
+```
+
+```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
+plot_dat <- kaupskra |> 
+    mutate(utgdag = dmy_hm(utgdag),
+           ar = year(utgdag)) |> 
+    filter(byggar >= ar - 3, ar >= 2014) |> 
+    select(sveitarfelag, ar, kaupverd) |> 
+    group_by(sveitarfelag, ar) |> 
+    summarise(kaupverd = median(kaupverd * 1000),
+              .groups = "drop") |> 
+    group_by(sveitarfelag) |> 
+    mutate(label = ifelse(ar == max(ar), sveitarfelag, NA_character_),
+           x = ar,
+           y = kaupverd,
+           y = case_when(sveitarfelag == "Mosfellsbær" ~ y,
+                         sveitarfelag == "Kópavogsbær" ~ y,
+                         sveitarfelag == "Garðabær" ~ y,
+                         sveitarfelag == "Reykjavíkurborg" ~ y,
+                         sveitarfelag == "Hafnarfjarðarkaupstaður" ~ y,
+                         sveitarfelag == "Seltjarnarnesbær" ~ y,
+                         TRUE ~ y)) |> 
+    ungroup()
+
+plot_dat |> 
+    ggplot(aes(ar, kaupverd)) +
+    geom_line(aes(col = sveitarfelag)) +
+    geom_text(data = plot_dat |> group_by(sveitarfelag) |> filter(ar == max(ar)),
+              aes(label = label, x = x, y = y, col = label), nudge_x = 0.05, hjust = 0, size = 4) +
+    geom_rangeframe() + 
+    scale_x_continuous(limits = c(2014, 2024.1),
+                       breaks = 2014:2022) +
+    scale_y_continuous(labels = label_number(accuracy = 1, suffix = " kr"),
+                       breaks = c(range(plot_dat$kaupverd))) +
+    scale_colour_brewer(type = "qual", palette = "Dark2") +
+    theme_tufte() +
+    theme(legend.position = "none") +
+    labs(x = NULL,
+         y = NULL,
+         title = "Miðgildi kaupverðs nýrra íbúða (byggðar síðustu 3 ár) í sveitarfélögum Höfuðborgarsvæðisins")
+```
+
+```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
+plot_dat <- kaupskra |> 
+    mutate(utgdag = dmy_hm(utgdag),
+           ar = year(utgdag),
+           fullbuid == 1) |> 
+    filter(byggar >= 2014) |> 
+    select(utgdag, ar, sveitarfelag, kaupverd, fastnum) |> 
+    mutate(kaupverd = kaupverd / 1000) |> 
+    group_by(fastnum) |> 
+    filter(utgdag == min(utgdag)) |> 
+    group_by(sveitarfelag) |> 
+    mutate(n_fastnum = n()) |> 
+    ungroup() |> 
+    mutate(sveitarfelag = str_c("<b>", sveitarfelag, "</b>", "<br>", "(Fasteignir = ", n_fastnum, ")")) |> 
+    inner_join(visitala,
+               by = "ar") |> 
+    mutate(kaupverd = kaupverd / visitala_2022)
+
+my_fun <- function(x) {
+    plot_dat |> 
+        filter(sveitarfelag != x) |> 
+        mutate(sveitarfelag = x)
+}
+
+plot_dat_compare <- map(unique(plot_dat$sveitarfelag), my_fun) |> 
+    reduce(bind_rows)
+
+p <- plot_dat |> 
+    ggplot() + 
+    geom_histogram(mapping = aes(x = kaupverd, y = ..ncount.., 
+                                 color = sveitarfelag, fill = sveitarfelag), 
+                   stat = "bin", bins = 40, size = 0.5,
+                   alpha = 0.7) + 
+    geom_step(data = plot_dat_compare, 
+              mapping = aes(x = kaupverd, y = ..ncount..), 
+              inherit.aes = FALSE,
+              bins = 40, alpha = 0.9,
+              color = "gray30", size = 0.6,
+              stat = "bin",
+              direction = "mid") + 
+    # geom_rangeframe(sides = "b") +
+    scale_x_log10(labels = label_number(suffix = " mkr")) +
+    scale_y_continuous(expand = expansion(),
+                       limits = c(0, 1.01)) +
+    scale_fill_brewer(type = "qual", palette = "Dark2") +
+    scale_colour_brewer(type = "qual", palette = "Dark2") +
+    guides(color = "none", fill = "none") + 
+    labs(x = NULL, y = NULL, 
+         title = "Dreifing kaupverðs nýrra íbúða í sveitarfélögum Höfuðborgarsvæðisins (byggt 2014 - 2022)", 
+         subtitle = "Borið saman við dreifingu í öðrum sveitarfélögum Höfuðborgarsvæðisins. Leiðrétt fyrir vísitölu neysluverðs.",
+         caption = "Kóði og gögn: https://github.com/bgautijonsson/fasteignafjoldi") + 
+    facet_wrap(~ sveitarfelag, nrow = 2, scales = "free_x") +
+    theme_tufte() +
+    theme(strip.background = element_rect( fill = "grey95"),
+          strip.text = element_markdown(),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          plot.title = element_text(face = "bold"))
+
+p
+
+ggsave(plot = p,
+       filename = "dreifing_kaupverds.png",
+       width = 8, height = 0.5 * 8, scale = 1.7, bg = "white")
+```
+
+
+
+
+
+
+
+```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
+plot_dat <- kaupskra |> 
+    mutate(utgdag = dmy_hm(utgdag),
+           ar = year(utgdag),
+           fullbuid == 1) |> 
+    filter(ar >= 2014) |> 
+    select(utgdag, ar, sveitarfelag, kaupverd, fasteignamat, fastnum) |> 
+    mutate(hlutf = kaupverd / fasteignamat) |> 
+    filter(hlutf <= 3, hlutf >= 1/3,
+           fasteignamat >= 30000, fasteignamat <= 100000)
+
+my_fun <- function(x) {
+    plot_dat |> 
+        filter(sveitarfelag != x) |> 
+        mutate(sveitarfelag = x)
+}
+
+plot_dat_compare <- map(unique(plot_dat$sveitarfelag), my_fun) |> 
+    reduce(bind_rows)
+
+p <- plot_dat |> 
+    ggplot() + 
+    geom_histogram(mapping = aes(x = hlutf, y = ..ncount.., 
+                                 color = sveitarfelag, fill = sveitarfelag), 
+                   stat = "bin", bins = 40, size = 0.5,
+                   alpha = 0.7) + 
+    geom_step(data = plot_dat_compare, 
+              mapping = aes(x = hlutf, y = ..ncount..), 
+              inherit.aes = FALSE,
+              bins = 40, alpha = 0.9,
+              color = "gray30", size = 0.6,
+              stat = "bin",
+              direction = "mid") + 
+    # geom_rangeframe(sides = "b") +
+    scale_x_log10(labels = function(x) percent(x - 1)) +
+    scale_y_continuous(expand = expansion(),
+                       limits = c(0, 1.01)) +
+    scale_fill_brewer(type = "qual", palette = "Dark2") +
+    scale_colour_brewer(type = "qual", palette = "Dark2") +
+    guides(color = "none", fill = "none") + 
+    labs(x = NULL, y = NULL) + 
+    facet_wrap(~ sveitarfelag, nrow = 2, scales = "free_x") +
+    theme_tufte() +
+    theme(strip.background = element_rect( fill = "grey95"),
+          strip.text = element_markdown(),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          plot.title = element_text(face = "bold"))
+
+p
+
+# ggsave(plot = p,
+#        filename = "dreifing_kaupverds.png",
+#        width = 8, height = 0.5 * 8, scale = 1.7, bg = "white")
+```
+
+```{r, fig.asp = 1, fig.width = 10, out.width = "100%"}
+plot_dat <- kaupskra |> 
+    mutate(utgdag = dmy_hm(utgdag),
+           ar = year(utgdag)) |> 
+    # filter(ar >= 2000) |> 
+    mutate(hlutf = kaupverd / fasteignamat,
+           tegund = ifelse(tegund == "Fjolbyli", "Fjölbýli", "Sérbýli")) |> 
+    group_by(tegund, ar, sveitarfelag) |> 
+    summarise(hlutf = median(hlutf),
+              .groups = "drop")
+
+
+p <- plot_dat |> 
+    ggplot(aes(ar, hlutf)) +
+    geom_hline(yintercept = 1, lty = 2, alpha = 0.6) +
+    geom_line(data = plot_dat |> rename(svf = sveitarfelag, teg = tegund), 
+              aes(group = paste(svf, teg)), alpha = 0.4, col = "grey50") +
+    geom_line(aes(col = sveitarfelag), size = 1.5) +
+    geom_rangeframe(sides = "b", aes(alpha = (sveitarfelag == "Seltjarnarnesbær"))) +
+    scale_x_continuous(breaks = c(2006, 2010, 2014, 2018, 2022)) +
+    scale_y_log10(labels = function(x) percent(x - 1), breaks = c(1, 1.1, 1.2, 1.3, 1.4)) +
+    scale_colour_brewer(type = "qual", palette = "Dark2") +
+    scale_alpha_manual(values = c(0, 1)) +
+    facet_grid(sveitarfelag ~ tegund) +
+    theme_tufte() +
+    theme(legend.position = "none",
+          strip.background = element_rect( fill = "grey95"),
+          plot.title = element_text(face = "bold")) +
+    labs(x = NULL,
+         y = NULL,
+         title = "Hversu miklu hærra hefur kaupverð verið en fasteignamat?",
+         subtitle = "Miðgildi fyrir hlutfallslegan mun sýnt fyrir sveitarfélög Höfuðborgarsvæðisins",
+         caption = "Kóði og gögn: https://github.com/bgautijonsson/fasteignafjoldi")
+
+p
+
+ggsave(plot = p,
+       filename = "kaupverd_hlutf_fasteignamat.png",
+       width = 8, height = 1 * 8, scale = 1.3, bg = "white")
+```
+
