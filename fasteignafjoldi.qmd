@@ -1304,6 +1304,14 @@ visitala <- pxweb_get(
     ungroup() |> 
     mutate(visitala_2022 = visitala_neysluverds / visitala_neysluverds[ar == 2022]) |> 
     select(-date, -visitala_neysluverds)
+
+
+visitala <- read_csv2("visitala_ibudarverds.csv") |> 
+    janitor::clean_names() |> 
+    filter(str_detect(manudur, "Janúar")) |> 
+    mutate(ar = parse_number(manudur)) |> 
+    mutate(visitala = allt_ibudarhusnaedi / allt_ibudarhusnaedi[ar == 2022]) |>
+    select(ar, visitala)
 ```
 
 ```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
@@ -1386,7 +1394,7 @@ plot_dat <- kaupskra |>
     mutate(sveitarfelag = str_c("<b>", sveitarfelag, "</b>", "<br>", "(Fasteignir = ", n_fastnum, ")")) |> 
     inner_join(visitala,
                by = "ar") |> 
-    mutate(kaupverd = kaupverd / visitala_2022)
+    mutate(kaupverd = kaupverd / visitala)
 
 my_fun <- function(x) {
     plot_dat |> 
@@ -1418,8 +1426,8 @@ p <- plot_dat |>
     scale_colour_brewer(type = "qual", palette = "Dark2") +
     guides(color = "none", fill = "none") + 
     labs(x = NULL, y = NULL, 
-         title = "Dreifing kaupverðs nýrra íbúða í sveitarfélögum Höfuðborgarsvæðisins (byggt 2014 - 2022)", 
-         subtitle = "Borið saman við dreifingu í öðrum sveitarfélögum Höfuðborgarsvæðisins. Leiðrétt fyrir vísitölu neysluverðs.",
+         title = "Dreifing kaupverðs nýrra íbúða (sér- og fjölbýli) í sveitarfélögum Höfuðborgarsvæðisins (byggt 2014 - 2022)", 
+         subtitle = "Borið saman við dreifingu í öðrum sveitarfélögum Höfuðborgarsvæðisins. Leiðrétt fyrir vísitölu íbúðarverðs (verðlag 2022).",
          caption = "Kóði og gögn: https://github.com/bgautijonsson/fasteignafjoldi") + 
     facet_wrap(~ sveitarfelag, nrow = 2, scales = "free_x") +
     theme_tufte() +
