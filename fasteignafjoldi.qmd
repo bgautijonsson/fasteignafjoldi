@@ -154,7 +154,44 @@ d <- d |>
         kaupendur,
         by = c("ar", "sveitarfelag")
     )
+
+
+
+tekjur <- pxweb_get(
+    url = "https://px.hagstofa.is:443/pxis/api/v1/is/Samfelag/launogtekjur/3_tekjur/1_tekjur_skattframtol/TEK01002.px",
+    query = list(
+        "Tekjur og skattar" = c("5"),
+        "Eining" = c("2"),
+        "Kyn" = c("0"),
+        "Sveitarfélag" = c("*"),
+        "Ár" =  c("*")
+    )
+) |> 
+    as.data.frame() |> 
+    as_tibble() |> 
+    janitor::clean_names() |> 
+    mutate(sveitarfelag = fct_recode(sveitarfelag,
+                                     "Reykjavíkurborg" = "Reykjavík",
+                                     "Hafnarfjarðarkaupstaður" = "Hafnarfjörður",
+                                     "Seltjarnarnesbær" = "Seltjarnarnes",
+                                     "Kópavogsbær" = "Kópavogur"),
+           ar = parse_number(ar)) |> 
+    semi_join(
+        d,
+        by = c("sveitarfelag", "ar")
+    ) |> 
+    select(sveitarfelag, ar, tekjur = tekjur_eftir_sveitarfelogum_og_kyni_sveitarfelagaskipan_1_januar_2021)
+
+
+d <- d |> 
+    left_join(
+        tekjur,
+        by = c("sveitarfelag", "ar")
+    )
+
 ```
+
+
 
 
 # Myndir
@@ -1259,7 +1296,81 @@ ggsave(plot = p,
 
 # Fyrstu kaupendur
 
+```{r}
+read_data <- function(name) {
+    svf <- list(
+        "gbr" = "Garðabær",
+        "hfj" = "Hafnarfjarðarkaupstaður",
+        "kop" = "Kópavogsbær",
+        "moso" = "Mosfellsbær",
+        "rvk" = "Reykjavíkurborg",
+        "seltj" = "Seltjarnarnesbær"
+    )
+    
+    str_c("hlutf_arsfj_", name, ".csv") |> 
+        read_csv2() |> 
+        janitor::clean_names() |> 
+        mutate(sveitarfelag = svf[[name]])
+}
+
+
+hlutf <- c("gbr", "hfj", "moso", "kop", "rvk", "seltj") |> 
+    map(read_data) |> 
+    reduce(bind_rows) |> 
+    separate(arsfjordungur, into = c("ar", "fj"), sep = "-") |> 
+    mutate(fj = parse_number(fj),
+           fj = 1 + (fj - 1) * 3,
+           fj = str_pad(fj, width = 2, side = "left", pad = "0"),
+           dags = str_c(ar, "-", fj, "-01") |> ymd()) |> 
+    select(dags, sveitarfelag, hlutfall_fyrstu_kaupenda)
+```
+
+
+
 ## Hlutfall
+
+### Ársfjórðungar
+
+```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
+plot_dat <- hlutf |> 
+    mutate(ar = year(dags)) |> 
+    filter(ar >= 2010) |> 
+    mutate(hlutfall_fyrstu_kaupenda = hlutfall_fyrstu_kaupenda / 100)
+
+p <- plot_dat |> 
+    ggplot(aes(dags, hlutfall_fyrstu_kaupenda)) +
+    geom_line(data = plot_dat |> rename(svf = sveitarfelag),
+              aes(group = svf),
+              alpha = 0.6, col = "grey50") +
+    geom_line(aes(col = sveitarfelag), size = 1.2) + 
+    geom_rangeframe() +
+    scale_x_date(breaks = seq.Date(from = ymd("2010-01-01"), to = ymd("2022-01-01"), 
+                                   by = "year"),
+                 date_labels = "%Y") +
+    scale_y_continuous(labels = label_percent(),
+                       breaks = c(0.1, 0.2, 0.3, 0.4),
+                       limits = c(0, 0.5),
+                       expand = expansion()) +
+    scale_colour_brewer(type = "qual", palette = "Dark2") +
+    facet_wrap("sveitarfelag") +
+    theme_tufte() +
+    theme(legend.position = "none",
+          strip.background = element_rect(colour = NA, fill = "grey90")) +
+    labs(x = NULL,
+         y = NULL,
+         title = "Hvar kaupa fyrstu kaupendur sér helst íbúð?",
+         subtitle = "Hlutfall fyrstu kaupenda af öllum kaupendum eftir ársfjórðungi og sveitarfélagi Höfuðborgarsvæðis",
+         caption = "Kóði og gögn: https://github.com/bgautijonsson/fasteignafjoldi")
+
+p
+
+ggsave(plot = p,
+       filename = "hlutfall_fyrstu_kaupenda_arsfj.png",
+       width = 8, height = 0.5 * 8, scale = 1.7, bg = "white")
+
+```
+
+### Ár
 
 ```{r, fig.asp = 0.5, fig.width = 10, out.width = "100%"}
 plot_dat <- d |> 
@@ -1287,11 +1398,9 @@ p <- plot_dat |>
           strip.background = element_rect(colour = NA, fill = "grey90")) +
     labs(x = NULL,
          y = NULL,
-         title = "Hvar kaupa fyrstu kaupendur sér helst íbúð?",
+         title = "Hvar er hlutfall fyrstu kaupenda hæst?",
          subtitle = "Hlutfall fyrstu kaupenda af öllum kaupendum eftir ári og sveitarfélagi Höfuðborgarsvæðis",
          caption = "Kóði og gögn: https://github.com/bgautijonsson/fasteignafjoldi")
-
-p
 
 p
 
@@ -1326,18 +1435,58 @@ p <- plot_dat |>
           strip.background = element_rect(colour = NA, fill = "grey90")) +
     labs(x = NULL,
          y = NULL,
-         title = "Hvar eru fyrstu kaupendur yngstir?",
+         title = "Hvar eru fyrstu kaupendur yngst?",
          subtitle = "Meðalaldur fyrstu kaupenda eftir ári og sveitarfélagi Höfuðborgarsvæðis",
          caption = "Kóði og gögn: https://github.com/bgautijonsson/fasteignafjoldi")
 
 p
 
-p
 
 ggsave(plot = p,
        filename = "aldur_fyrstu_kaupenda.png",
        width = 8, height = 0.5 * 8, scale = 1.7, bg = "white")
 
+```
+
+### Tekjur
+
+```{r}
+plot_dat <- d |> 
+    filter(ar >= 2010) |> 
+    inner_join(
+        visitala,
+        by = "ar"
+    ) |> 
+    group_by(ar) |> 
+    mutate(tekjur = tekjur / tekjur[sveitarfelag == "Reykjavíkurborg"])
+
+p <- plot_dat |> 
+    ggplot(aes(ar, tekjur)) +
+    geom_line(data = plot_dat |> rename(svf = sveitarfelag),
+              aes(group = svf),
+              alpha = 0.6, col = "grey50") +
+    geom_line(aes(col = sveitarfelag), size = 1.2) + 
+    geom_rangeframe() +
+    scale_x_continuous(breaks = 2010:2022, 
+                       expand = expansion(), 
+                       limits = c(2009.5, 2022.5)) +
+    scale_y_log10(labels = function(x) percent(x - 1)) +
+    scale_colour_brewer(type = "qual", palette = "Dark2") +
+    facet_wrap("sveitarfelag") +
+    theme_tufte() +
+    theme(legend.position = "none",
+          strip.background = element_rect(colour = NA, fill = "grey90")) +
+    labs(x = NULL,
+         y = NULL,
+         title = "Hvar eru tekjur hæstar?",
+         subtitle = "Miðgildi ráðstöfunartekna borið saman við Reykjavíkurborg eftir ári og sveitarfélagi Höfuðborgarsvæðis",
+         caption = "Kóði og gögn: https://github.com/bgautijonsson/fasteignafjoldi")
+
+p
+
+ggsave(plot = p,
+       filename = "tekjur.png",
+       width = 8, height = 0.5 * 8, scale = 1.7, bg = "white")
 ```
 
 
