@@ -1855,20 +1855,39 @@ d <- read_csv2("eigendaskipting.csv") |>
     set_names(c("ar", "logadilar_margar", "logadilar_ein", "einst_margar", "einst_ein"))
 ```
 
-```{r}
-d |> 
-    set_names(c("ar", "logadilar_margar", "logadilar_ein", "einst_margar", "einst_ein")) |> 
-    mutate(adrir = logadilar_margar + einst_margar,
-           ein = logadilar_ein + einst_ein) |> 
-    select(ar, ein, adrir) |> 
+```{r, fig.width = 10, fig.asp = 0.5}
+p <- d |> 
+    set_names(c("ar", "Lögaðilar (Margar)", "Lögaðilar (Ein)", "Einstaklingar (Margar)", "Einstaklingar (Ein)")) |> 
+    # mutate(adrir = logadilar_margar + einst_margar,
+    #        ein = logadilar_ein + einst_ein) |> 
+    # select(ar, ein, adrir) |> 
     pivot_longer(c(-ar)) |> 
     group_by(name) |> 
     mutate(value = c(0, diff(value))) |> 
-    filter(ar >= 2000) |> 
+    ungroup() |> 
+    # filter(ar >= 2000) |> 
+    mutate(name = fct_relevel(name,
+                              "Lögaðilar (Margar)",
+                              "Lögaðilar (Ein)",
+                              "Einstaklingar (Margar)",
+                              "Einstaklingar (Ein)"
+                              )) |> 
     ggplot(aes(ar, value)) +
+    geom_hline(yintercept = 0, lty = 2) +
     geom_col(aes(fill = name), position = "stack", width = 1) +
-    scale_x_continuous(expand = expansion()) +
-    scale_y_continuous(expand = expansion())
+    scale_x_continuous(expand = expansion(),
+                       breaks = c(seq(1994, 2022, by = 2))) +
+    scale_y_continuous(expand = expansion()) +
+    scale_fill_brewer(type = "div", palette = "RdBu") +
+    theme_half_open() +
+    theme(legend.position = "top") +
+    labs(x = NULL,
+         y = NULL,
+         fill = NULL,
+         title = "Árleg breyting í fjölda fasteigna eftir eignarhaldi")
+
+ggsave(plot = p, filename)ggsave(plot = p, filename = "arleg_breyting_eignarhald.png",
+       width = 8, height = 0.5 * 8, scale = 1.3, bg = "white")
 ```
 
 ```{r}
@@ -1887,7 +1906,7 @@ p <- plot_dat |>
     scale_x_continuous(breaks = c(range(d$ar), 2000, 2005, 2010, 2015)) +
     scale_y_continuous(labels = label_percent(accuracy = 1),
                        breaks = c(range(plot_dat$hlutf), 0.3, 0.27, 0.33)) +
-    coord_cartesian(ylim = c(0.23, 0.38)) +
+    # coord_cartesian(ylim = c(0.23, 0.38)) +
     theme_tufte() +
     theme(plot.title = element_text(face = "bold")) +
     labs(x = NULL,
@@ -1895,7 +1914,39 @@ p <- plot_dat |>
          title = "Hlutfall fasteigna í eigu einstaklinga eða lögaðila sem eiga fleiri en eina fasteign",
          caption = "Kóði og gögn: https://github.com/bgautijonsson/fasteignafjoldi")
 
+p
+
 ggsave(plot = p, filename = "hlutf_eiga_margar.png",
        width = 8, height = 0.5 * 8, scale = 1.3, bg = "white")
 ```
 
+```{r}
+plot_dat <- d |> 
+    set_names(c("ar", "logadilar_margar", "logadilar_ein", "einst_margar", "einst_ein")) |> 
+    mutate(adrir = logadilar_margar + einst_margar,
+           ein = logadilar_ein + einst_ein) |> 
+    select(ar, ein, adrir) |> 
+    mutate(heild = ein + adrir,
+           hlutf = adrir / heild)
+
+p <- plot_dat |> 
+    ggplot(aes(ar, hlutf)) +
+    geom_area() +
+    geom_rangeframe(data = tibble(ar = c(1994,2022),
+                                  hlutf = c(0, 0.36))) +
+    scale_x_continuous(breaks = c(range(d$ar), 2000, 2005, 2010, 2015)) +
+    scale_y_continuous(labels = label_percent(accuracy = 1),
+                       breaks = c(0, 0.1, 0.2, 0.3, 0.36)) +
+    # coord_cartesian(ylim = c(0.23, 0.38)) +
+    theme_tufte() +
+    theme(plot.title = element_text(face = "bold")) +
+    labs(x = NULL,
+         y = NULL,
+         title = "Hlutfall fasteigna í eigu einstaklinga eða lögaðila sem eiga fleiri en eina fasteign",
+         caption = "Kóði og gögn: https://github.com/bgautijonsson/fasteignafjoldi")
+
+p
+
+ggsave(plot = p, filename = "hlutf_eiga_margar_area.png",
+       width = 8, height = 0.5 * 8, scale = 1.3, bg = "white")
+```
