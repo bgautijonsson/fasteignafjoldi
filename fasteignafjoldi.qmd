@@ -33,6 +33,7 @@ library(gganimate)
 library(lubridate)
 library(ggridges)
 library(ggtext)
+library(rjson)
 ```
 
 # Gögn
@@ -1493,7 +1494,7 @@ ggsave(plot = p,
 # Kaupskra
 
 ```{r}
-kaupskra <- read_csv2("kaupskra.csv", locale = locale(encoding = "ISO-8859-1")) |> 
+kaupskra <- read_csv2("https://www.skra.is/library/Skrar/kaupskra/kaupskra.csv", locale = locale(encoding = "ISO-8859-1")) |> 
     semi_join(d,
               by = "sveitarfelag") |> 
     filter(tegund %in% c("Serbyli", "Fjolbyli"),
@@ -1865,13 +1866,13 @@ p <- d |>
     group_by(name) |> 
     mutate(value = c(0, diff(value))) |> 
     ungroup() |> 
-    # filter(ar >= 2000) |> 
+    filter(ar >= 1995) |>
     mutate(name = fct_relevel(name,
                               "Lögaðilar (Margar)",
                               "Lögaðilar (Ein)",
                               "Einstaklingar (Margar)",
                               "Einstaklingar (Ein)"
-                              )) |> 
+    )) |> 
     ggplot(aes(ar, value)) +
     geom_hline(yintercept = 0, lty = 2) +
     geom_col(aes(fill = name), position = "stack", width = 1) +
@@ -1884,10 +1885,108 @@ p <- d |>
     labs(x = NULL,
          y = NULL,
          fill = NULL,
-         title = "Árleg breyting í fjölda fasteigna eftir eignarhaldi")
+         title = "Árleg breyting í fjölda fasteigna eftir eignarhaldi",
+         caption = "Kóði og gögn: https://github.com/bgautijonsson/fasteignafjoldi")
 
-ggsave(plot = p, filename)ggsave(plot = p, filename = "arleg_breyting_eignarhald.png",
+ggsave(plot = p, filename = "arleg_breyting_eignarhald.png",
        width = 8, height = 0.5 * 8, scale = 1.3, bg = "white")
+```
+
+```{r, fig.width = 10, fig.asp = 0.5}
+plot_dat <- d |> 
+    set_names(c("ar", "Lögaðilar (Margar)", "Lögaðilar (Ein)", "Einstaklingar (Margar)", "Einstaklingar (Ein)")) |> 
+    # mutate(adrir = logadilar_margar + einst_margar,
+    #        ein = logadilar_ein + einst_ein) |> 
+    # select(ar, ein, adrir) |> 
+    pivot_longer(c(-ar)) |> 
+    # group_by(ar) |> 
+    # mutate(value = value / sum(value)) |> 
+    ungroup() |> 
+    group_by(name) |> 
+    mutate(value = c(0, diff(value))) |> 
+    ungroup() |> 
+    filter(ar >= 1995) |>
+    mutate(name = fct_relevel(name,
+                              "Lögaðilar (Margar)",
+                              "Lögaðilar (Ein)",
+                              "Einstaklingar (Margar)",
+                              "Einstaklingar (Ein)"
+    ),
+    facet_cols = ifelse(str_detect(name, "Lögaðilar"), "Lögaðilar", "Einstaklingar"),
+    facet_rows = ifelse(str_detect(name, "Margar"), "Sem eiga fleiri en eina", "Sem eiga eina")) 
+
+
+p <- plot_dat |> 
+    ggplot(aes(ar, value)) +
+    geom_col(data = plot_dat |> rename(nm = name, f1 = facet_cols, f2 = facet_rows), aes(group = nm), fill = "black", position = "stack", width = 1, alpha = 0.2) +
+    geom_col(aes(fill = name), position = "stack", width = 1) +
+    geom_hline(yintercept = 0, lty = 2) +
+    scale_x_continuous(expand = expansion(),
+                       breaks = c(seq(1995, 2020, by = 5))) +
+    scale_y_continuous(expand = expansion(),
+                       labels = label_number()) +
+    scale_fill_brewer(type = "div", palette = "RdBu") +
+    facet_grid(facet_rows ~ facet_cols) +
+    theme_half_open() +
+    theme(legend.position = "none", panel.spacing = unit(0.55, "cm")) +
+    labs(x = NULL,
+         y = NULL,
+         fill = NULL,
+         title = "Árleg breyting í hlutfalli fasteigna eftir eignarhaldi",
+         subtitle = "Sýnt fyrir lögaðila og einstaklinga sem eiga eina eða fleiri en eina fasteign",
+         caption = "Kóði og gögn: https://github.com/bgautijonsson/fasteignafjoldi")
+
+ggsave(plot = p, filename = "arleg_breyting_eignarhald.png",
+       width = 8, height = 0.6 * 8, scale = 1.6, bg = "white")
+```
+
+```{r, fig.width = 10, fig.asp = 0.5}
+plot_dat <- d |> 
+    set_names(c("ar", "Lögaðilar (Margar)", "Lögaðilar (Ein)", "Einstaklingar (Margar)", "Einstaklingar (Ein)")) |> 
+    # mutate(adrir = logadilar_margar + einst_margar,
+    #        ein = logadilar_ein + einst_ein) |> 
+    # select(ar, ein, adrir) |> 
+    pivot_longer(c(-ar)) |> 
+    group_by(ar) |> 
+    mutate(value = value / sum(value)) |> 
+    ungroup() |> 
+    group_by(name) |> 
+    mutate(value = c(0, diff(value))) |> 
+    ungroup() |> 
+    filter(ar >= 1995) |>
+    mutate(name = fct_relevel(name,
+                              "Lögaðilar (Margar)",
+                              "Lögaðilar (Ein)",
+                              "Einstaklingar (Margar)",
+                              "Einstaklingar (Ein)"
+    ),
+    facet_cols = ifelse(str_detect(name, "Lögaðilar"), "Lögaðilar", "Einstaklingar"),
+    facet_rows = ifelse(str_detect(name, "Margar"), "Sem eiga fleiri en eina", "Sem eiga eina")) 
+
+
+p <- plot_dat |> 
+    ggplot(aes(ar, value)) +
+    geom_col(data = plot_dat |> rename(nm = name, f1 = facet_cols, f2 = facet_rows), aes(group = nm), fill = "black", position = "stack", width = 1, alpha = 0.2) +
+    geom_col(aes(fill = name), position = "stack", width = 1) +
+    geom_hline(yintercept = 0, lty = 2) +
+    scale_x_continuous(expand = expansion(),
+                       breaks = c(seq(1995, 2020, by = 5))) +
+    scale_y_continuous(expand = expansion(),
+                       labels = label_percent(),
+                       limits = c(-0.02, 0.02)) +
+    scale_fill_brewer(type = "div", palette = "RdBu") +
+    facet_grid(facet_rows ~ facet_cols) +
+    theme_half_open() +
+    theme(legend.position = "none", panel.spacing = unit(0.55, "cm")) +
+    labs(x = NULL,
+         y = NULL,
+         fill = NULL,
+         title = "Árleg breyting í hlutfalli fasteigna eftir eignarhaldi",
+         subtitle = "Sýnt fyrir lögaðila og einstaklinga sem eiga eina eða fleiri en eina fasteign",
+         caption = "Kóði og gögn: https://github.com/bgautijonsson/fasteignafjoldi")
+
+ggsave(plot = p, filename = "arleg_breyting_eignarhaldhlutf.png",
+       width = 8, height = 0.6 * 8, scale = 1.6, bg = "white")
 ```
 
 ```{r}
@@ -1949,4 +2048,294 @@ p
 
 ggsave(plot = p, filename = "hlutf_eiga_margar_area.png",
        width = 8, height = 0.5 * 8, scale = 1.3, bg = "white")
+```
+
+
+```{r}
+plot_dat <- d |> 
+    set_names(c("ar", "logadilar_margar", "logadilar_ein", "einst_margar", "einst_ein")) |> 
+    mutate(adrir = logadilar_margar + einst_margar,
+           ein = logadilar_ein + einst_ein) |> 
+    select(ar, "Eiga eina" = ein, "Eiga fleiri en eina" = adrir) |> 
+    pivot_longer(c(-ar))
+
+p <- plot_dat |> 
+    ggplot(aes(ar, value)) +
+    geom_area(aes(fill = name), position = "fill") +
+    scale_x_continuous(breaks = c(range(d$ar), 2000, 2005, 2010, 2015),
+                       expand = expansion()) +
+    scale_y_continuous(labels = label_percent(accuracy = 1),
+                       breaks = pretty_breaks(6),
+                       expand = expansion()) +
+    scale_fill_brewer(type = "div", palette = "Paired")  +
+    # coord_cartesian(ylim = c(0.23, 0.38)) +
+    theme_half_open() +
+    theme(plot.title = element_text(face = "bold"),
+          legend.position = "right") +
+    labs(x = NULL,
+         y = NULL,
+         fill = NULL,
+         title = "Hlutfall fasteigna eftir eignarhaldi",
+         caption = "Kóði og gögn: https://github.com/bgautijonsson/fasteignafjoldi")
+
+p
+
+ggsave(plot = p, filename = "hlutf_eignarhald_area.png",
+       width = 8, height = 0.5 * 8, scale = 1.3, bg = "white")
+```
+
+```{r}
+plot_dat <- d |> 
+    set_names(c("ar", "Lögaðilar (Margar)", "Lögaðilar (Ein)", "Einstaklingar (Margar)", "Einstaklingar (Ein)")) |> 
+    pivot_longer(c(-ar)) |> 
+    mutate(name = fct_relevel(name,
+                              "Lögaðilar (Margar)",
+                              "Lögaðilar (Ein)",
+                              "Einstaklingar (Margar)",
+                              "Einstaklingar (Ein)"
+    ))
+
+p <- plot_dat |> 
+    ggplot(aes(ar, value)) +
+    geom_col(aes(fill = name), position = "fill", width = 1) +
+    scale_x_continuous(breaks = c(range(d$ar), 2000, 2005, 2010, 2015),
+                       expand = expansion()) +
+    scale_y_continuous(labels = label_percent(accuracy = 1),
+                       breaks = pretty_breaks(6),
+                       expand = expansion()) +
+    scale_fill_brewer(type = "div", palette = "RdBu") +
+    # coord_cartesian(ylim = c(0.23, 0.38)) +
+    theme_half_open() +
+    theme(plot.title = element_text(face = "bold"),
+          legend.position = "top",
+          plot.margin = margin(t = 5, r = 20, b = 5, l = 5)) +
+    labs(x = NULL,
+         y = NULL,
+         fill = NULL,
+         title = "Hlutfall fasteigna eftir eignarhaldi",
+         caption = "Kóði og gögn: https://github.com/bgautijonsson/fasteignafjoldi")
+
+p
+
+ggsave(plot = p, filename = "hlutf_allteignarhald_area.png",
+       width = 8, height = 0.5 * 8, scale = 1.3, bg = "white")
+```
+
+```{r}
+plot_dat <- d |> 
+    set_names(c("ar", "Lögaðilar (Margar)", "Lögaðilar (Ein)", "Einstaklingar (Margar)", "Einstaklingar (Ein)")) |> 
+    pivot_longer(c(-ar)) |> 
+    group_by(ar) |> 
+    mutate(hlutf = value / sum(value)) |> 
+    ungroup()
+
+p <- plot_dat |> 
+    ggplot(aes(ar, hlutf)) +
+    geom_line(aes(col = name)) +
+    scale_x_continuous(breaks = c(range(d$ar), 2000, 2005, 2010, 2015),
+                       expand = expansion()) +
+    scale_y_continuous(labels = label_percent(accuracy = 1),
+                       breaks = pretty_breaks(6),
+                       expand = expansion()) +
+    scale_fill_brewer(type = "div", palette = "Paired")  +
+    # coord_cartesian(ylim = c(0.23, 0.38)) +
+    theme_half_open() +
+    theme(plot.title = element_text(face = "bold"),
+          legend.position = "top",
+          plot.margin = margin(t = 5, r = 20, b = 5, l = 5)) +
+    labs(x = NULL,
+         y = NULL,
+         fill = NULL,
+         title = "Hlutfall fasteigna eftir eignarhaldi",
+         caption = "Kóði og gögn: https://github.com/bgautijonsson/fasteignafjoldi")
+
+p
+
+ggsave(plot = p, filename = "hlutf_allteignarhald_area.png",
+       width = 8, height = 0.5 * 8, scale = 1.3, bg = "white")
+```
+
+# Fjöldi fasteigna frá JSON
+
+```{r, fig.width = 12}
+library(rjson)
+
+get_tables <- function(data, years) {
+    tibble(
+        ar = years,
+        svfn = data$svfn,
+        sveitarfelag = data$name,
+        fjolbyli_fjoldi = data$fjolbyli_fjoldi,
+        fjolbyli_medaltal = data$fjolbyli_medaltal,
+        fjolbyli_midgildi = data$fjolbyli_midgildi,
+        serbyli_fjoldi = data$serbyli_fjoldi,
+        serbyli_medaltal = data$serbyli_medaltal,
+        serbyli_midgildi = data$serbyli_midgildi,
+    ) |> 
+        pivot_longer(c(-svfn, -sveitarfelag, -ar), names_to = c("tegund", "breyta"), names_sep = "_") |> 
+        mutate(value = ifelse(value == "None", "0", value)) |> 
+        pivot_wider(names_from = breyta, values_from = value)
+}
+
+d <- fromJSON(file = "https://talnaefni.skra.is/talnaefni/v1/staerdibudasveitarfelog")
+
+d <- d$sveitarfélög |> 
+    map(get_tables, years = d$date) |> 
+    reduce(bind_rows) |> 
+    mutate_at(vars(ar, svfn, fjoldi, medaltal, midgildi), parse_number) |> 
+    mutate(sveitarfelag = fct_recode(sveitarfelag,
+                                     "Akureyrarkaupstaður" = "Akureyrarbær")) |> 
+    inner_join(mannfjoldi,
+               by = c("sveitarfelag", "ar")) |> 
+    inner_join(
+        fjolskyldur |> 
+            count(sveitarfelag, ar,
+                  wt = fjolskyldur, 
+                  name = "fjolskyldur"),
+        by =  c("sveitarfelag", "ar")
+    )
+```
+
+
+```{r, fig.width = 10}
+sveitarfelog <- d |> 
+    distinct(sveitarfelag, ar, mannfjoldi) |> 
+    filter(ar == max(ar)) |> 
+    top_n(9, wt = mannfjoldi)
+
+
+plot_dat <- d |> 
+    semi_join(sveitarfelog, by = "sveitarfelag") |> 
+    filter(ar >= 2000, ar < 2022) |> 
+    group_by(ar, sveitarfelag, mannfjoldi) |> 
+    summarise(fjoldi = sum(fjoldi),
+              .groups = "drop") |> 
+    mutate(fjoldi_hofdatolu = fjoldi/mannfjoldi * 1000)
+
+plot_dat |> 
+    ggplot(aes(ar, fjoldi_hofdatolu)) +
+    geom_line(data = plot_dat |> rename(svf = sveitarfelag), aes(group = svf), col = "grey50", alpha = 0.5) +
+    geom_line(aes(col = sveitarfelag), size = 1.4) +
+    scale_x_continuous() +
+    scale_y_continuous() +
+    scale_colour_brewer(type = "qual", palette = "Paired") +
+    facet_wrap("sveitarfelag") +
+    theme_half_open() +
+    theme(legend.position = "none") +
+    labs(x = NULL,
+         y = NULL)
+```
+
+```{r, fig.width = 10, fig.asp = 0.5}
+sveitarfelog <- d |> 
+    filter(ar == max(ar)) |> 
+    filter(mannfjoldi > 1e3)
+
+
+plot_dat <- d |> 
+    semi_join(sveitarfelog, by = "sveitarfelag") |> 
+    filter(ar >= 2010) |> 
+    group_by(ar, sveitarfelag, mannfjoldi) |> 
+    summarise(fjoldi = sum(fjoldi),
+              .groups = "drop") |> 
+    mutate(fjoldi_hofdatolu = fjoldi/mannfjoldi * 1000) |> 
+    filter(ar >= 2018) |> 
+    group_by(sveitarfelag) |> 
+    summarise(fjoldi_hofdatolu = sum(fjoldi_hofdatolu),
+              .groups = "drop") |> 
+    mutate(sveitarfelag = fct_reorder(sveitarfelag, fjoldi_hofdatolu),
+           x = ifelse(sveitarfelag == "Dalvíkurbyggð", 18.2, NA_real_),
+           text = "Meðaltal á landsvísu")
+
+
+samtals <- d |> 
+    filter(ar >= 2018) |> 
+    group_by(ar) |> 
+    summarise(mannfjoldi = sum(mannfjoldi),
+              fjoldi = sum(fjoldi),
+              .groups = "drop") |> 
+    mutate(fjoldi_hofdatolu = fjoldi / mannfjoldi * 1000) |> 
+    pull(fjoldi_hofdatolu) |> 
+    sum()
+
+p <- plot_dat |> 
+    ggplot(aes(fjoldi_hofdatolu, sveitarfelag)) +
+    geom_vline(xintercept = samtals, lty = 2, alpha = 0.5) +
+    geom_segment(aes(xend = 0, yend = sveitarfelag), alpha = 0.5, size = 0.4) +
+    geom_point() +
+    geom_text(aes(x = x, label = text), hjust = 0, alpha = 0.6) +
+    scale_x_continuous(expand = expansion(),
+                       labels = label_number(accuracy = 1),
+                       limits = c(0, NA),
+                       breaks = c(range(plot_dat$fjoldi_hofdatolu), seq(00, 80, by = 10), samtals)) +
+    coord_cartesian(clip = "off") +
+    theme_half_open() +
+    theme(legend.position = "none",
+          plot.margin = margin(t = 5, r = 25, b = 5, l = 5)) +
+    labs(x = NULL,
+         y = NULL,
+         title = "Fjöldi nýbyggðra sér- og fjölbýliseigna per 1.000 íbúar frá 2018",
+         subtitle = "Sýnt fyrir sveitarfélög með fleiri en 1.000 íbúa árið 2022")
+
+p
+
+ggsave(plot = p, filename = "fjoldi_hofdatolu_2018.png",
+       width = 8, height = 0.5 * 8, scale = 1.7, bg = "white")
+```
+
+
+```{r, fig.width = 10, fig.asp = 0.5}
+sveitarfelog <- d |> 
+    filter(ar == max(ar)) |> 
+    filter(mannfjoldi > 1e3)
+
+
+plot_dat <- d |> 
+    semi_join(sveitarfelog, by = "sveitarfelag") |> 
+    filter(ar >= 2018) |> 
+    group_by(ar, sveitarfelag, mannfjoldi) |> 
+    summarise(fjoldi = sum(fjoldi),
+              .groups = "drop") |> 
+    mutate(fjoldi_hofdatolu = fjoldi/mannfjoldi * 1000) |> 
+    group_by(sveitarfelag) |> 
+    summarise(fjoldi_hofdatolu = sum(fjoldi_hofdatolu),
+              .groups = "drop") |> 
+    mutate(sveitarfelag = fct_reorder(sveitarfelag, fjoldi_hofdatolu),
+           x = ifelse(sveitarfelag == "Dalvíkurbyggð", 18.2, NA_real_),
+           text = "Meðaltal á landsvísu")
+
+
+samtals <- d |> 
+    filter(ar >= 2018) |> 
+    group_by(ar) |> 
+    summarise(mannfjoldi = sum(mannfjoldi),
+              fjoldi = sum(fjoldi),
+              .groups = "drop") |> 
+    mutate(fjoldi_hofdatolu = fjoldi / mannfjoldi * 1000) |> 
+    pull(fjoldi_hofdatolu) |> 
+    sum()
+
+p <- plot_dat |> 
+    ggplot(aes(fjoldi_hofdatolu, sveitarfelag)) +
+    geom_vline(xintercept = samtals, lty = 2, alpha = 0.5) +
+    geom_segment(aes(xend = 0, yend = sveitarfelag), alpha = 0.5, size = 0.4) +
+    geom_point() +
+    geom_text(aes(x = x, label = text), hjust = 0, alpha = 0.6) +
+    scale_x_continuous(expand = expansion(),
+                       labels = label_number(accuracy = 1),
+                       limits = c(0, NA),
+                       breaks = c(range(plot_dat$fjoldi_hofdatolu), seq(00, 80, by = 10), samtals)) +
+    coord_cartesian(clip = "off") +
+    theme_half_open() +
+    theme(legend.position = "none",
+          plot.margin = margin(t = 5, r = 25, b = 5, l = 5)) +
+    labs(x = NULL,
+         y = NULL,
+         title = "Fjöldi nýbyggðra sér- og fjölbýliseigna per 1.000 íbúar frá 2018",
+         subtitle = "Sýnt fyrir sveitarfélög með fleiri en 1.000 íbúa árið 2022")
+
+p
+
+ggsave(plot = p, filename = "fjoldi_hofdatolu_2018.png",
+       width = 8, height = 0.5 * 8, scale = 1.7, bg = "white")
 ```
